@@ -20,13 +20,20 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set")
 
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")   # Optional – if not set, polling is used
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")   # Optional – if not set, fallback to polling
 PORT = int(os.environ.get("PORT", 5000))
 BOT_LANG = os.environ.get("BOT_LANG", "python")
 logger.info(f"Bot language setting: {BOT_LANG}")
 
-# ---------- Build Application ----------
-application = Application.builder().token(BOT_TOKEN).build()
+# ---------- FIX: Build Application WITHOUT an Updater ----------
+# The critical change: .updater(None) prevents the creation of the Updater object
+# which causes the AttributeError on Python 3.14.
+application = (
+    Application.builder()
+    .token(BOT_TOKEN)
+    .updater(None)   # <-- THIS SOLVES THE PROBLEM
+    .build()
+)
 
 # ---------- Handlers ----------
 async def start(update: Update, context):
@@ -98,7 +105,7 @@ async def button_callback(update: Update, context):
         )
         await query.edit_message_text(text=help_text, parse_mode="Markdown")
 
-# Register all handlers
+# Register handlers
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("help", help_command))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
@@ -106,7 +113,7 @@ application.add_handler(CallbackQueryHandler(button_callback))
 
 # ---------- Deployment Mode ----------
 if WEBHOOK_URL:
-    # ---------- Webhook mode (with Flask) ----------
+    # ---------- Webhook mode (Flask + Gunicorn) ----------
     app = Flask(__name__)
 
     def set_webhook_sync():
@@ -116,8 +123,7 @@ if WEBHOOK_URL:
         except Exception as e:
             logger.error(f"Failed to set webhook: {e}")
 
-    # Set webhook once when the module loads
-    set_webhook_sync()
+    set_webhook_sync()  # runs at startup
 
     @app.route("/webhook", methods=["POST"])
     def webhook():
@@ -132,12 +138,20 @@ if WEBHOOK_URL:
             return jsonify({"status": "error", "message": str(e)}), 500
         return jsonify({"status": "ok"}), 200
 
-    # Run Flask (either via gunicorn or python bot.py)
     if __name__ == "__main__":
+        # This runs only when you execute `python bot.py` directly
         app.run(host="0.0.0.0", port=PORT)
 
 else:
-    # ---------- Polling mode (no Flask) ----------
+    # ---------- Polling mode (fallback, no Flask) ----------
     logger.warning("WEBHOOK_URL not set – using long polling.")
     if __name__ == "__main__":
-        application.run_polling()
+        # We create a separate Application with updater for polling.
+        # This won't error because we are not using .updater(None) here.
+        poll_app = Application.builder().token(BOT_TOKEN).build()
+        # Re-add handlers (or copy them from the main app)
+        poll_app.add_handler(CommandHandler("start", start))
+        poll_app.add_handler(CommandHandler("help", help_command))
+        poll_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+        poll_app.add_handler(CallbackQueryHandler(button_callback))
+        poll_app.run_polling()
