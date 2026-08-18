@@ -20,17 +20,15 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set")
 
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
-if not WEBHOOK_URL:
-    raise ValueError("WEBHOOK_URL environment variable not set")
-
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Optional now
 PORT = int(os.environ.get("PORT", 5000))
+BOT_LANG = os.environ.get("BOT_LANG", "python")
+logger.info(f"Bot language setting: {BOT_LANG}")
 
-# ---------- Flask & Telegram App ----------
-app = Flask(__name__)
+# ---------- Telegram Application ----------
 application = Application.builder().token(BOT_TOKEN).build()
 
-# ---------- Handlers (same as before) ----------
+# ---------- Handlers (unchanged) ----------
 async def start(update: Update, context):
     keyboard = [
         [
@@ -106,34 +104,41 @@ application.add_handler(CommandHandler("help", help_command))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 application.add_handler(CallbackQueryHandler(button_callback))
 
-# ---------- Webhook Setup (runs once at startup) ----------
-def set_webhook_sync():
-    """Synchronous wrapper to set the webhook."""
-    try:
-        asyncio.run(application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook"))
-        logger.info(f"Webhook set to {WEBHOOK_URL}/webhook")
-    except Exception as e:
-        logger.error(f"Failed to set webhook: {e}")
+# ---------- Decide deployment mode ----------
+if WEBHOOK_URL:
+    # ---------- Webhook mode ----------
+    app = Flask(__name__)
 
-# Run this when the module is imported (i.e., when the worker starts)
-set_webhook_sync()
+    def set_webhook_sync():
+        try:
+            asyncio.run(application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook"))
+            logger.info(f"Webhook set to {WEBHOOK_URL}/webhook")
+        except Exception as e:
+            logger.error(f"Failed to set webhook: {e}")
 
-# ---------- Flask Webhook Endpoint ----------
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    json_data = request.get_json(force=True)
-    if not json_data:
-        return jsonify({"status": "error", "message": "No data"}), 400
-    try:
-        update = Update.de_json(json_data, application.bot)
-        asyncio.run(application.process_update(update))
-    except Exception as e:
-        logger.error(f"Error processing update: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-    return jsonify({"status": "ok"}), 200
+    # Set webhook when module loads
+    set_webhook_sync()
 
-# ---------- Main Entry Point ----------
-if __name__ == "__main__":
-    # When run with `python bot.py`, start the Flask dev server.
-    # The webhook is already set above, so no need to set again.
-    app.run(host="0.0.0.0", port=PORT)
+    @app.route("/webhook", methods=["POST"])
+    def webhook():
+        json_data = request.get_json(force=True)
+        if not json_data:
+            return jsonify({"status": "error", "message": "No data"}), 400
+        try:
+            update = Update.de_json(json_data, application.bot)
+            asyncio.run(application.process_update(update))
+        except Exception as e:
+            logger.error(f"Error processing update: {e}")
+            return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "ok"}), 200
+
+    # Entry point for webhook (gunicorn or python bot.py)
+    if __name__ == "__main__":
+        app.run(host="0.0.0.0", port=PORT)
+
+else:
+    # ---------- Polling mode (no Flask needed) ----------
+    logger.warning("WEBHOOK_URL not set, using long polling instead.")
+    if __name__ == "__main__":
+        # Run polling directly
+        application.run_polling()
