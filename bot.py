@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
-# Enable logging
+# ---------- Logging ----------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -26,22 +26,19 @@ if not WEBHOOK_URL:
 
 PORT = int(os.environ.get("PORT", 5000))
 
-# ---------- Flask App ----------
+# ---------- Flask & Telegram App ----------
 app = Flask(__name__)
-
-# ---------- Telegram Application ----------
 application = Application.builder().token(BOT_TOKEN).build()
 
-# ---------- Handlers ----------
+# ---------- Handlers (same as before) ----------
 async def start(update: Update, context):
-    """Send a professional welcome message with inline keyboard."""
     keyboard = [
         [
             InlineKeyboardButton("📄 Convert Text", callback_data="convert"),
             InlineKeyboardButton("ℹ️ How it Works", callback_data="how"),
         ],
         [
-            InlineKeyboardButton("🔗 Support / Channel", url="https://t.me/yourchannel"),  # Replace with your channel
+            InlineKeyboardButton("🔗 Support / Channel", url="https://t.me/yourchannel"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -57,7 +54,6 @@ async def start(update: Update, context):
     await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
 async def help_command(update: Update, context):
-    """Send detailed help message."""
     help_text = (
         "📄 **How to Convert Text:**\n"
         "Just send me any text message, and I'll convert it to a .txt file for you.\n\n"
@@ -70,21 +66,14 @@ async def help_command(update: Update, context):
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 async def handle_text(update: Update, context):
-    """Capture user text, create a .txt file, and send it back as a document."""
     user_text = update.message.text
     if not user_text:
         return
-
-    # Generate timestamped filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"sbc24_note_{timestamp}.txt"
-
-    # Write text to an in‑memory bytes buffer
     file_bytes = BytesIO()
     file_bytes.write(user_text.encode("utf-8"))
     file_bytes.seek(0)
-
-    # Send the file as a document
     await update.message.reply_document(
         document=file_bytes,
         filename=filename,
@@ -92,10 +81,8 @@ async def handle_text(update: Update, context):
     )
 
 async def button_callback(update: Update, context):
-    """Handle inline button presses."""
     query = update.callback_query
-    await query.answer()  # Acknowledge the callback
-
+    await query.answer()
     data = query.data
     if data == "convert":
         await query.edit_message_text(
@@ -113,51 +100,40 @@ async def button_callback(update: Update, context):
         )
         await query.edit_message_text(text=help_text, parse_mode="Markdown")
 
-# Register all handlers
+# Register handlers
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("help", help_command))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 application.add_handler(CallbackQueryHandler(button_callback))
 
-# ---------- Webhook Setup ----------
-async def set_webhook():
-    """Set the webhook URL for the bot."""
-    webhook_url = f"{WEBHOOK_URL}/webhook"
-    await application.bot.set_webhook(url=webhook_url)
-    logger.info(f"Webhook set to {webhook_url}")
+# ---------- Webhook Setup (runs once at startup) ----------
+def set_webhook_sync():
+    """Synchronous wrapper to set the webhook."""
+    try:
+        asyncio.run(application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook"))
+        logger.info(f"Webhook set to {WEBHOOK_URL}/webhook")
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}")
 
-_webhook_set = False
-
-@app.before_first_request
-def setup_webhook():
-    """Run the async webhook setup once before the first request."""
-    global _webhook_set
-    if not _webhook_set:
-        try:
-            asyncio.run(set_webhook())
-            _webhook_set = True
-        except Exception as e:
-            logger.error(f"Failed to set webhook: {e}")
+# Run this when the module is imported (i.e., when the worker starts)
+set_webhook_sync()
 
 # ---------- Flask Webhook Endpoint ----------
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Receive incoming Telegram updates and process them."""
     json_data = request.get_json(force=True)
     if not json_data:
         return jsonify({"status": "error", "message": "No data"}), 400
-
     try:
         update = Update.de_json(json_data, application.bot)
         asyncio.run(application.process_update(update))
     except Exception as e:
         logger.error(f"Error processing update: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
     return jsonify({"status": "ok"}), 200
 
-# ---------- Local Development ----------
+# ---------- Main Entry Point ----------
 if __name__ == "__main__":
-    # Set webhook and run the Flask development server
-    asyncio.run(set_webhook())
+    # When run with `python bot.py`, start the Flask dev server.
+    # The webhook is already set above, so no need to set again.
     app.run(host="0.0.0.0", port=PORT)
