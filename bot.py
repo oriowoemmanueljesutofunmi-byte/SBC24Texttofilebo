@@ -20,15 +20,15 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set")
 
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Optional now
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")   # Optional – if not set, polling is used
 PORT = int(os.environ.get("PORT", 5000))
 BOT_LANG = os.environ.get("BOT_LANG", "python")
 logger.info(f"Bot language setting: {BOT_LANG}")
 
-# ---------- Telegram Application ----------
+# ---------- Build Application ----------
 application = Application.builder().token(BOT_TOKEN).build()
 
-# ---------- Handlers (unchanged) ----------
+# ---------- Handlers ----------
 async def start(update: Update, context):
     keyboard = [
         [
@@ -98,15 +98,15 @@ async def button_callback(update: Update, context):
         )
         await query.edit_message_text(text=help_text, parse_mode="Markdown")
 
-# Register handlers
+# Register all handlers
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("help", help_command))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 application.add_handler(CallbackQueryHandler(button_callback))
 
-# ---------- Decide deployment mode ----------
+# ---------- Deployment Mode ----------
 if WEBHOOK_URL:
-    # ---------- Webhook mode ----------
+    # ---------- Webhook mode (with Flask) ----------
     app = Flask(__name__)
 
     def set_webhook_sync():
@@ -116,7 +116,7 @@ if WEBHOOK_URL:
         except Exception as e:
             logger.error(f"Failed to set webhook: {e}")
 
-    # Set webhook when module loads
+    # Set webhook once when the module loads
     set_webhook_sync()
 
     @app.route("/webhook", methods=["POST"])
@@ -132,13 +132,12 @@ if WEBHOOK_URL:
             return jsonify({"status": "error", "message": str(e)}), 500
         return jsonify({"status": "ok"}), 200
 
-    # Entry point for webhook (gunicorn or python bot.py)
+    # Run Flask (either via gunicorn or python bot.py)
     if __name__ == "__main__":
         app.run(host="0.0.0.0", port=PORT)
 
 else:
-    # ---------- Polling mode (no Flask needed) ----------
-    logger.warning("WEBHOOK_URL not set, using long polling instead.")
+    # ---------- Polling mode (no Flask) ----------
+    logger.warning("WEBHOOK_URL not set – using long polling.")
     if __name__ == "__main__":
-        # Run polling directly
         application.run_polling()
