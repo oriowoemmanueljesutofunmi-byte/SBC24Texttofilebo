@@ -20,18 +20,23 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set")
 
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")   # Optional – if not set, fallback to polling
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+if not WEBHOOK_URL:
+    raise ValueError(
+        "WEBHOOK_URL environment variable is not set. "
+        "Please set it to your Render service URL (e.g., https://your-bot.onrender.com) "
+        "and redeploy. Webhook mode is required for this bot to run on Python 3.14."
+    )
+
 PORT = int(os.environ.get("PORT", 5000))
 BOT_LANG = os.environ.get("BOT_LANG", "python")
 logger.info(f"Bot language setting: {BOT_LANG}")
 
-# ---------- FIX: Build Application WITHOUT an Updater ----------
-# The critical change: .updater(None) prevents the creation of the Updater object
-# which causes the AttributeError on Python 3.14.
+# ---------- Build Application WITHOUT an Updater (critical fix) ----------
 application = (
     Application.builder()
     .token(BOT_TOKEN)
-    .updater(None)   # <-- THIS SOLVES THE PROBLEM
+    .updater(None)   # prevents creation of the problematic Updater object
     .build()
 )
 
@@ -111,47 +116,33 @@ application.add_handler(CommandHandler("help", help_command))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 application.add_handler(CallbackQueryHandler(button_callback))
 
-# ---------- Deployment Mode ----------
-if WEBHOOK_URL:
-    # ---------- Webhook mode (Flask + Gunicorn) ----------
-    app = Flask(__name__)
+# ---------- Webhook Setup ----------
+def set_webhook_sync():
+    try:
+        asyncio.run(application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook"))
+        logger.info(f"Webhook set to {WEBHOOK_URL}/webhook")
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}")
+        raise
 
-    def set_webhook_sync():
-        try:
-            asyncio.run(application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook"))
-            logger.info(f"Webhook set to {WEBHOOK_URL}/webhook")
-        except Exception as e:
-            logger.error(f"Failed to set webhook: {e}")
+set_webhook_sync()
 
-    set_webhook_sync()  # runs at startup
+# ---------- Flask App ----------
+app = Flask(__name__)
 
-    @app.route("/webhook", methods=["POST"])
-    def webhook():
-        json_data = request.get_json(force=True)
-        if not json_data:
-            return jsonify({"status": "error", "message": "No data"}), 400
-        try:
-            update = Update.de_json(json_data, application.bot)
-            asyncio.run(application.process_update(update))
-        except Exception as e:
-            logger.error(f"Error processing update: {e}")
-            return jsonify({"status": "error", "message": str(e)}), 500
-        return jsonify({"status": "ok"}), 200
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    json_data = request.get_json(force=True)
+    if not json_data:
+        return jsonify({"status": "error", "message": "No data"}), 400
+    try:
+        update = Update.de_json(json_data, application.bot)
+        asyncio.run(application.process_update(update))
+    except Exception as e:
+        logger.error(f"Error processing update: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    return jsonify({"status": "ok"}), 200
 
-    if __name__ == "__main__":
-        # This runs only when you execute `python bot.py` directly
-        app.run(host="0.0.0.0", port=PORT)
-
-else:
-    # ---------- Polling mode (fallback, no Flask) ----------
-    logger.warning("WEBHOOK_URL not set – using long polling.")
-    if __name__ == "__main__":
-        # We create a separate Application with updater for polling.
-        # This won't error because we are not using .updater(None) here.
-        poll_app = Application.builder().token(BOT_TOKEN).build()
-        # Re-add handlers (or copy them from the main app)
-        poll_app.add_handler(CommandHandler("start", start))
-        poll_app.add_handler(CommandHandler("help", help_command))
-        poll_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-        poll_app.add_handler(CallbackQueryHandler(button_callback))
-        poll_app.run_polling()
+# ---------- Entry Point ----------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=PORT)
