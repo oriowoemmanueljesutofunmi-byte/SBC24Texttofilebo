@@ -6,19 +6,15 @@ from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Environment
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN not set")
 
-# Build Application (with default Updater – works on Python 3.11)
 app = Application.builder().token(BOT_TOKEN).build()
 
-# Handlers
 async def start(update, context):
     keyboard = [
         [InlineKeyboardButton("📄 Convert Text", callback_data="convert")],
@@ -60,5 +56,5 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 app.add_handler(CallbackQueryHandler(button_callback))
 
 if __name__ == "__main__":
-    print("Bot started polling...")
+    logger.info("Bot started with long polling.")
     app.run_polling()
